@@ -53,6 +53,19 @@ def test_pubmed_mock_behavior() -> None:
     assert articles[0]["pmid"] == "12345678"
 
 
+def test_pubmed_real_retrieval_returns_results() -> None:
+    import asyncio
+
+    # Use a broad, stable biomedical search term to avoid flaky empty-result responses.
+    articles = asyncio.run(PubMedClient().search_articles("cancer", retmax=1))
+
+    assert articles, "Expected at least one real PubMed result for query 'cancer'."
+    article = articles[0]
+    assert article["pmid"]
+    assert article["title"]
+    assert article["url"].startswith("https://pubmed.ncbi.nlm.nih.gov/")
+
+
 def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(PubMedClient, "search_articles", _fake_search)
     with TestClient(app) as client:

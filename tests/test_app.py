@@ -74,3 +74,27 @@ def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         assert ev.status_code == 200
         cit = client.get(f"/adjudications/{adj_id}/citations")
         assert cit.status_code == 200
+
+
+def test_adjudication_flow_prints_inputs_outputs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(PubMedClient, "search_articles", _fake_search)
+    with TestClient(app) as client:
+        claim_input = {"user_text": "Is KRAS associated with treatment response?"}
+        print("INPUT /claims:", claim_input)
+        create = client.post("/claims", json=claim_input)
+        print("OUTPUT /claims:", create.status_code, create.json())
+        assert create.status_code == 200
+        claim_id = create.json()["claim_id"]
+
+        adjudicate_path = f"/claims/{claim_id}/adjudicate"
+        print("INPUT", adjudicate_path)
+        adj = client.post(adjudicate_path)
+        print("OUTPUT", adjudicate_path, ":", adj.status_code, adj.json())
+        assert adj.status_code == 200
+        adj_id = adj.json()["adjudication_id"]
+
+        detail_path = f"/adjudications/{adj_id}"
+        print("INPUT", detail_path)
+        detail = client.get(detail_path)
+        print("OUTPUT", detail_path, ":", detail.status_code, detail.json())
+        assert detail.status_code == 200

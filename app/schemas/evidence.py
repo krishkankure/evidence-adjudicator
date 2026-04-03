@@ -1,36 +1,61 @@
+from enum import Enum
+
 from pydantic import BaseModel, Field
 
-from app.schemas.common import BranchEnum
+
+class EvidenceLabel(str, Enum):
+    direct_support = "direct_support"
+    indirect_contextual_support = "indirect_contextual_support"
+    opposing = "opposing"
+    alternative_contextual = "alternative_contextual"
+    irrelevant = "irrelevant"
 
 
-class EvidenceCard(BaseModel):
+class EvidenceDecision(str, Enum):
+    accepted = "accepted"
+    rejected = "rejected"
+
+
+class EvidenceCandidate(BaseModel):
     evidence_id: str
     source_type: str = "pubmed"
+    query: str
+    query_intent: str
+
     pmid: str | None = None
     title: str
-    abstract_snippet: str = ""
     authors: list[str] = Field(default_factory=list)
     journal: str = ""
     publication_year: int | None = None
-    query_branch: BranchEnum
-    relevance_score: float
-    url: str = ""
+    abstract_snippet: str = ""
     extracted_finding: str = ""
-    limitation_note: str
+    limitations_note: str = ""
+
+    url: str = ""
+    citation_link: str = ""
+
+    retrieval_score: float = 0.0
+    directness_score: float = 0.0
+    final_score: float = 0.0
+
+    label: EvidenceLabel
+    decision: EvidenceDecision
+    decision_reason: str
 
 
 class Citation(BaseModel):
     citation_id: str
+    source_type: str = "pubmed"
     pmid: str | None = None
     title: str
     journal: str = ""
     year: int | None = None
     url: str = ""
-    quote_or_snippet: str = ""
-    branch: BranchEnum
+    citation_link: str = ""
+    snippet: str = ""
 
 
-class GroupedEvidence(BaseModel):
-    supporting: list[EvidenceCard] = Field(default_factory=list)
-    opposing: list[EvidenceCard] = Field(default_factory=list)
-    alternative: list[EvidenceCard] = Field(default_factory=list)
+class EvidenceBundle(BaseModel):
+    retrieved_candidates: list[EvidenceCandidate] = Field(default_factory=list)
+    accepted_evidence: list[EvidenceCandidate] = Field(default_factory=list)
+    rejected_candidates: list[EvidenceCandidate] = Field(default_factory=list)

@@ -42,41 +42,66 @@ export function adjudicateClaim(claimId: string): Promise<AdjudicateClaimRespons
 }
 
 export async function getAdjudication(adjudicationId: string): Promise<AdjudicationResponse> {
-  const [adjudication, evidenceRows, citationRows] = await Promise.all([
-    request<Record<string, unknown>>(`/adjudications/${adjudicationId}`),
-    request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/evidence`),
-    request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/citations`),
-  ]);
+  const detail = await request<Record<string, unknown>>(`/adjudications/${adjudicationId}`);
 
-  const querySet = parseQuerySet(adjudication.generated_queries);
+  const adjudicationNode = asRecord(detail.adjudication);
+  const evidenceNode = asRecord(detail.evidence);
+  const generatedQueries = detail.generated_queries ?? evidenceNode.generated_queries;
+
+  const acceptedEvidence = asArrayOfRecords(evidenceNode.accepted_evidence);
+  const rejectedEvidence = asArrayOfRecords(evidenceNode.rejected_candidates);
+  const evidenceRows = [...acceptedEvidence, ...rejectedEvidence];
 
   return {
-    adjudication_id: String(adjudication.adjudication_id ?? adjudicationId),
-    claim_id: String(adjudication.claim_id ?? ''),
+    adjudication_id: String(detail.adjudication_id ?? adjudicationId),
+    claim_id: String(detail.claim_id ?? ''),
     best_supported_conclusion: String(
-      adjudication.best_supported_conclusion ??
-        adjudication.conclusion ??
-        adjudication.adjudication_summary ??
+      adjudicationNode.best_supported_conclusion ??
+        detail.best_supported_conclusion ??
+        detail.conclusion ??
+        detail.adjudication_summary ??
         'No conclusion returned.',
     ),
-    confidence: normalizeConfidence(adjudication.confidence),
-    supporting_case: asOptionalString(adjudication.supporting_case),
-    opposing_case: asOptionalString(adjudication.opposing_case),
-    alternative_explanations: asOptionalString(adjudication.alternative_explanations),
-    query_set: querySet,
+    confidence: normalizeConfidence(adjudicationNode.confidence ?? detail.confidence),
+    supporting_case: asOptionalString(adjudicationNode.supporting_case ?? detail.supporting_case),
+    opposing_case: asOptionalString(adjudicationNode.opposing_case ?? detail.opposing_case),
+    alternative_explanations: asOptionalString(
+      adjudicationNode.alternative_explanations ?? detail.alternative_explanations,
+    ),
+    query_set: parseQuerySet(generatedQueries),
     evidence: evidenceRows.map((row, index) => mapEvidence(row, index)),
-    citations: citationRows.map((row, index) => mapCitation(row, index)),
+    citations: asArrayOfRecords(detail.citations).map((row, index) => mapCitation(row, index)),
   };
 }
 
 function parseQuerySet(value: unknown): QuerySet | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const record = value as Record<string, unknown>;
-  return {
+  const record = asRecord(value);
+
+  if (Array.isArray(record.items)) {
+    const queriesByIntent = new Map<string, string>();
+    for (const item of record.items) {
+      if (typeof item !== 'object' || item === null) continue;
+      const queryItem = item as Record<string, unknown>;
+      const intent = asOptionalString(queryItem.intent);
+      const query = asOptionalString(queryItem.query);
+      if (intent && query) queriesByIntent.set(intent, query);
+    }
+
+    return {
+      supporting: queriesByIntent.get('direct_support') ?? queriesByIntent.get('supporting'),
+      opposing: queriesByIntent.get('opposing'),
+      alternative: queriesByIntent.get('alternative_contextual') ?? queriesByIntent.get('alternative'),
+    };
+  }
+
+  const fallback = {
     supporting: asOptionalString(record.supporting ?? record.support_query),
     opposing: asOptionalString(record.opposing ?? record.oppose_query),
     alternative: asOptionalString(record.alternative ?? record.alternative_query),
   };
+
+  if (!fallback.supporting && !fallback.opposing && !fallback.alternative) return undefined;
+  return fallback;
 }
 
 function mapEvidence(row: Record<string, unknown>, index: number): EvidenceCard {
@@ -90,7 +115,9 @@ function mapEvidence(row: Record<string, unknown>, index: number): EvidenceCard 
     pmid,
     snippet: asOptionalString(row.snippet ?? row.extracted_snippet ?? row.finding),
     branch,
-    url: asOptionalString(row.url ?? row.citation_link) ?? (pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : undefined),
+    url:
+      asOptionalString(row.url ?? row.citation_link) ??
+      (pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : undefined),
   };
 }
 
@@ -125,4 +152,16 @@ function asOptionalString(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim().length > 0) return value;
   if (typeof value === 'number') return String(value);
   return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function asArrayOfRecords(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null);
 }

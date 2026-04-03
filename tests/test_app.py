@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
+import pytest
 
+from app.core.exceptions import ProviderError
 from app.main import app
 from app.providers.pubmed_client import PubMedClient
 from app.services.query_generator import QueryGeneratorService
@@ -89,10 +91,10 @@ def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         assert cit.status_code == 200
 
 
-def test_adjudication_flow_prints_inputs_outputs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(PubMedClient, "search_articles", _fake_search)
+def test_adjudication_flow_prints_inputs_outputs_real_pubmed() -> None:
     with TestClient(app) as client:
-        claim_input = {"user_text": "Is KRAS associated with treatment response?"}
+        # Use a broad/stable claim so at least the support branch consistently retrieves real PubMed articles.
+        claim_input = {"user_text": "Is cancer associated with inflammation?"}
         print("INPUT /claims:", claim_input)
         create = client.post("/claims", json=claim_input)
         print("OUTPUT /claims:", create.status_code, create.json())
@@ -111,3 +113,78 @@ def test_adjudication_flow_prints_inputs_outputs(monkeypatch) -> None:  # type: 
         detail = client.get(detail_path)
         print("OUTPUT", detail_path, ":", detail.status_code, detail.json())
         assert detail.status_code == 200
+        payload = detail.json()
+        support = payload["evidence"]["supporting"]
+        assert support, "Expected real PubMed evidence in the support branch."
+        assert support[0]["pmid"] not in {None, "", "999"}
+        assert not support[0]["title"].startswith("Result for ")
+
+
+def test_pubmed_parsing_handles_nested_text_collective_author_and_medline_date() -> None:
+    xml = """
+    <PubmedArticleSet>
+      <PubmedArticle>
+        <MedlineCitation>
+          <PMID>111</PMID>
+          <Article>
+            <ArticleTitle>Study of <i>TP53</i> variants</ArticleTitle>
+            <Journal>
+              <Title>J Example</Title>
+              <JournalIssue>
+                <PubDate>
+                  <MedlineDate>2021 Jan-Feb</MedlineDate>
+                </PubDate>
+              </JournalIssue>
+            </Journal>
+            <AuthorList>
+              <Author>
+                <CollectiveName>Genome Consortium</CollectiveName>
+              </Author>
+            </AuthorList>
+            <Abstract>
+              <AbstractText Label="BACKGROUND">A <i>nested</i> abstract.</AbstractText>
+            </Abstract>
+          </Article>
+        </MedlineCitation>
+      </PubmedArticle>
+    </PubmedArticleSet>
+    """
+
+    articles = PubMedClient()._parse_efetch_xml(xml)
+    assert len(articles) == 1
+    assert articles[0]["title"] == "Study of TP53 variants"
+    assert articles[0]["publication_year"] == 2021
+    assert articles[0]["authors"] == ["Genome Consortium"]
+    assert articles[0]["abstract"] == "A nested abstract."
+
+
+def test_pubmed_invalid_xml_raises_provider_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    class _Resp:
+        def __init__(self, payload: dict | None = None, text: str = "") -> None:
+            self._payload = payload or {}
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _DummyClient:
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        async def get(self, url, params):  # type: ignore[no-untyped-def]
+            if "esearch.fcgi" in url:
+                return _Resp({"esearchresult": {"idlist": ["123"]}})
+            return _Resp(text="<not><xml>")
+
+    monkeypatch.setattr("app.providers.pubmed_client.httpx.AsyncClient", lambda timeout=15.0: _DummyClient())
+
+    with pytest.raises(ProviderError, match="PubMed XML parse failed"):
+        asyncio.run(PubMedClient().search_articles("cancer", retmax=1))

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from xml.etree import ElementTree
 
 import httpx
@@ -71,29 +72,36 @@ class PubMedClient:
                     **params_common,
                     "db": "pubmed",
                     "retmode": "xml",
+                    "rettype": "abstract",
                     "id": ",".join(pmids),
                 },
             )
 
-        return self._parse_efetch_xml(fetch_resp.text)
+        try:
+            return self._parse_efetch_xml(fetch_resp.text)
+        except ElementTree.ParseError as exc:
+            raise ProviderError(f"PubMed XML parse failed: {exc}") from exc
 
     def _parse_efetch_xml(self, xml_text: str) -> list[dict]:
         root = ElementTree.fromstring(xml_text)
         articles: list[dict] = []
         for art in root.findall(".//PubmedArticle"):
             pmid = art.findtext(".//PMID")
-            title = art.findtext(".//ArticleTitle") or ""
+            title = self._normalize_whitespace(self._node_text(art.find(".//ArticleTitle")))
             journal = art.findtext(".//Journal/Title") or ""
-            year_text = art.findtext(".//PubDate/Year")
-            year = int(year_text) if year_text and year_text.isdigit() else None
+            year = self._extract_year(art)
             authors = []
             for a in art.findall(".//Author"):
+                collective = self._normalize_whitespace(a.findtext("CollectiveName") or "")
+                if collective:
+                    authors.append(collective)
+                    continue
                 lastname = a.findtext("LastName") or ""
                 initials = a.findtext("Initials") or ""
                 val = f"{lastname} {initials}".strip()
                 if val:
                     authors.append(val)
-            abstract_text = " ".join([x.text or "" for x in art.findall(".//Abstract/AbstractText")]).strip()
+            abstract_text = self._normalize_whitespace(" ".join(self._node_text(x) for x in art.findall(".//Abstract/AbstractText")))
             articles.append(
                 {
                     "pmid": pmid,
@@ -107,3 +115,32 @@ class PubMedClient:
             )
         logger.info("PubMed parsed %s articles", len(articles))
         return articles
+
+    @staticmethod
+    def _node_text(node: ElementTree.Element | None) -> str:
+        if node is None:
+            return ""
+        return "".join(node.itertext())
+
+    @staticmethod
+    def _normalize_whitespace(value: str) -> str:
+        return " ".join(value.split())
+
+    @staticmethod
+    def _extract_year(article_node: ElementTree.Element) -> int | None:
+        candidate_paths = [
+            ".//JournalIssue/PubDate/Year",
+            ".//ArticleDate/Year",
+            ".//PubDate/Year",
+            ".//DateCompleted/Year",
+            ".//DateRevised/Year",
+            ".//MedlineDate",
+        ]
+        for path in candidate_paths:
+            value = article_node.findtext(path)
+            if not value:
+                continue
+            year_match = re.search(r"\b(19|20)\d{2}\b", value)
+            if year_match:
+                return int(year_match.group(0))
+        return None

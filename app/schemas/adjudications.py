@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from app.schemas.common import ConfidenceEnum, StatusEnum
-from app.schemas.evidence import Citation, GroupedEvidence
+from app.schemas.evidence import Citation, EvidenceBundle
 
 
 class AdjudicationSummary(BaseModel):
@@ -12,6 +12,7 @@ class AdjudicationSummary(BaseModel):
     confidence: ConfidenceEnum
     limitations: str
     reasoning_summary: str
+    evidence_grounding_note: str
 
 
 class AdjudicationCreateResponse(BaseModel):
@@ -27,10 +28,14 @@ class ClaimSummary(BaseModel):
     normalized_claim: str
 
 
-class Queries(BaseModel):
-    support: str
-    oppose: str
-    alternative: str
+class GeneratedQuery(BaseModel):
+    query: str
+    intent: str
+    backend: str = "pubmed"
+
+
+class GeneratedQueries(BaseModel):
+    items: list[GeneratedQuery] = Field(default_factory=list)
 
 
 class AdjudicationDetailResponse(BaseModel):
@@ -38,8 +43,8 @@ class AdjudicationDetailResponse(BaseModel):
     claim_id: str
     status: StatusEnum
     claim: ClaimSummary
-    queries: Queries
-    evidence: GroupedEvidence
+    generated_queries: GeneratedQueries
+    evidence: EvidenceBundle
     adjudication: AdjudicationSummary
     citations: list[Citation] = Field(default_factory=list)
     created_at: str

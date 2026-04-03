@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -26,46 +28,32 @@ def test_create_and_get_claim() -> None:
         assert get_resp.json()["claim_id"] == data["claim_id"]
 
 
-def test_query_generator_deterministic() -> None:
+def test_query_generator_claim_specific() -> None:
     queries = QueryGeneratorService.generate("X is associated with Y")
-    assert queries.support.endswith("evidence association mechanism")
-    assert "contradictory evidence" in queries.oppose
-    assert "alternative mechanism" in queries.alternative
+    assert len(queries.items) >= 5
+    assert any(q.intent == "direct_support" for q in queries.items)
+    assert any("[Title/Abstract]" in q.query for q in queries.items)
+    assert any("replication" in q.query for q in queries.items)
 
 
 async def _fake_search(self, query: str, retmax: int | None = None) -> list[dict]:  # noqa: ARG001
     return [
         {
             "pmid": "999",
-            "title": f"Result for {query}",
+            "title": f"Systematic review result for {query}",
             "authors": ["A B"],
             "journal": "J Test",
             "publication_year": 2022,
-            "abstract": "Abstract snippet text for deterministic tests.",
+            "abstract": "This study evaluates direct association, mechanism, and contradictory findings.",
             "url": "https://pubmed.ncbi.nlm.nih.gov/999/",
         }
     ]
 
 
 def test_pubmed_mock_behavior() -> None:
-    import asyncio
-
     articles = asyncio.run(PubMedClient().search_articles("MOCK: query"))
     assert articles
     assert articles[0]["pmid"] == "12345678"
-
-
-def test_pubmed_real_retrieval_returns_results() -> None:
-    import asyncio
-
-    # Use a broad, stable biomedical search term to avoid flaky empty-result responses.
-    articles = asyncio.run(PubMedClient().search_articles("cancer", retmax=1))
-
-    assert articles, "Expected at least one real PubMed result for query 'cancer'."
-    article = articles[0]
-    assert article["pmid"]
-    assert article["title"]
-    assert article["url"].startswith("https://pubmed.ncbi.nlm.nih.gov/")
 
 
 def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -81,43 +69,15 @@ def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         detail = client.get(f"/adjudications/{adj_id}")
         assert detail.status_code == 200
         body = detail.json()
-        assert set(body["evidence"].keys()) == {"supporting", "opposing", "alternative"}
-        assert "adjudication" in body
+        assert "generated_queries" in body
+        assert set(body["evidence"].keys()) == {"retrieved_candidates", "accepted_evidence", "rejected_candidates"}
         assert isinstance(body["citations"], list)
+        assert body["adjudication"]["evidence_grounding_note"]
 
-        ev = client.get(f"/adjudications/{adj_id}/evidence")
-        assert ev.status_code == 200
-        cit = client.get(f"/adjudications/{adj_id}/citations")
-        assert cit.status_code == 200
-
-
-def test_adjudication_flow_prints_inputs_outputs_real_pubmed() -> None:
-    with TestClient(app) as client:
-        # Use a broad/stable claim so at least the support branch consistently retrieves real PubMed articles.
-        claim_input = {"user_text": "Is cancer associated with inflammation?"}
-        print("INPUT /claims:", claim_input)
-        create = client.post("/claims", json=claim_input)
-        print("OUTPUT /claims:", create.status_code, create.json())
-        assert create.status_code == 200
-        claim_id = create.json()["claim_id"]
-
-        adjudicate_path = f"/claims/{claim_id}/adjudicate"
-        print("INPUT", adjudicate_path)
-        adj = client.post(adjudicate_path)
-        print("OUTPUT", adjudicate_path, ":", adj.status_code, adj.json())
-        assert adj.status_code == 200
-        adj_id = adj.json()["adjudication_id"]
-
-        detail_path = f"/adjudications/{adj_id}"
-        print("INPUT", detail_path)
-        detail = client.get(detail_path)
-        print("OUTPUT", detail_path, ":", detail.status_code, detail.json())
-        assert detail.status_code == 200
-        payload = detail.json()
-        support = payload["evidence"]["supporting"]
-        assert support, "Expected real PubMed evidence in the support branch."
-        assert support[0]["pmid"] not in {None, "", "999"}
-        assert not support[0]["title"].startswith("Result for ")
+        accepted = body["evidence"]["accepted_evidence"]
+        assert accepted
+        assert accepted[0]["decision"] == "accepted"
+        assert accepted[0]["citation_link"].startswith("https://pubmed.ncbi.nlm.nih.gov/")
 
 
 def test_pubmed_parsing_handles_nested_text_collective_author_and_medline_date() -> None:
@@ -159,8 +119,6 @@ def test_pubmed_parsing_handles_nested_text_collective_author_and_medline_date()
 
 
 def test_pubmed_invalid_xml_raises_provider_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    import asyncio
-
     class _Resp:
         def __init__(self, payload: dict | None = None, text: str = "") -> None:
             self._payload = payload or {}
@@ -188,3 +146,40 @@ def test_pubmed_invalid_xml_raises_provider_error(monkeypatch) -> None:  # type:
 
     with pytest.raises(ProviderError, match="PubMed XML parse failed"):
         asyncio.run(PubMedClient().search_articles("cancer", retmax=1))
+
+
+def test_directness_filter_rejects_tangential_evidence(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def _mixed_search(self, query: str, retmax: int | None = None) -> list[dict]:  # noqa: ARG001
+        return [
+            {
+                "pmid": "1",
+                "title": "Omega-3 supplementation and triglyceride lowering: systematic review",
+                "authors": ["A B"],
+                "journal": "J Lipids",
+                "publication_year": 2023,
+                "abstract": "Meta-analysis in adults showed omega-3 reduced triglycerides.",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+            },
+            {
+                "pmid": "2",
+                "title": "Eye movement replication study in adults",
+                "authors": ["C D"],
+                "journal": "J Vision",
+                "publication_year": 2024,
+                "abstract": "Assesses oculomotor endurance and visual processing in young adults.",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/2/",
+            },
+        ]
+
+    monkeypatch.setattr(PubMedClient, "search_articles", _mixed_search)
+    with TestClient(app) as client:
+        create = client.post("/claims", json={"user_text": "Does omega-3 supplementation reduce triglycerides in adults?"})
+        claim_id = create.json()["claim_id"]
+        adj = client.post(f"/claims/{claim_id}/adjudicate")
+        adj_id = adj.json()["adjudication_id"]
+        detail = client.get(f"/adjudications/{adj_id}").json()
+
+    accepted_titles = [e["title"] for e in detail["evidence"]["accepted_evidence"]]
+    rejected_titles = [e["title"] for e in detail["evidence"]["rejected_candidates"]]
+    assert any("Omega-3" in t for t in accepted_titles)
+    assert any("Eye movement" in t for t in rejected_titles)

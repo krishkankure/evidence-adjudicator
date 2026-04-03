@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     pubmed_api_key: str | None = None
     pubmed_max_results: int = 3
 
+    retrieval_mode: str = "pubmed"  # pubmed | web | hybrid
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

@@ -1,22 +1,53 @@
-# Evidence Adjudicator (MVP Backend)
+# Evidence Adjudicator
 
-A backend-first biomedical evidence adjudication engine built with FastAPI.
+A backend-first biomedical/scientific claim adjudication engine built with FastAPI.
 
-## Why this is **not** a generic chatbot
-This API is claim-centered: it explicitly retrieves and compares evidence from three adversarial branches before producing a conclusion:
-1. supporting evidence
-2. opposing/contradictory evidence
-3. alternative explanations
+## What this system now optimizes for
+- **Evidence-grounded adjudication** (accepted evidence is separated from raw retrieval candidates).
+- **Claim-direct retrieval** (query generation + directness reranking reduce topical-but-vague matches).
+- **Traceability** (every accepted evidence item carries clickable citation metadata).
+- **Extensibility** (retrieval backends are modular: `pubmed`, `web`, `hybrid` via config).
 
-The goal is to reduce framing bias and sycophancy in claim analysis.
+## Retrieval + adjudication pipeline (v2)
+1. Parse + normalize claim.
+2. Generate claim-specific scientific queries (support, contradiction, alternatives, replication).
+3. Broad retrieval from configured backend(s):
+   - PubMed (biomedical primary source)
+   - optional web-assisted backend scaffold (OpenAI tool path)
+4. Two-stage ranking/filtering:
+   - retrieval score from backend rank
+   - directness score from claim-term overlap + evidence-bearing study cues
+5. Candidate labeling and decisioning:
+   - `direct_support`
+   - `indirect_contextual_support`
+   - `opposing`
+   - `alternative_contextual`
+   - `irrelevant`
+6. Accepted evidence is passed to adjudication; rejected candidates remain inspectable with rejection reasons.
+7. Adjudication summary explicitly states evidence grounding strength and limitations.
 
-## MVP capabilities
-- Create and persist normalized biomedical claims
-- Generate deterministic support/oppose/alternative queries
-- Retrieve literature from PubMed (NCBI E-utilities)
-- Build normalized evidence cards and citations
-- Produce structured adjudication (OpenAI JSON mode if key exists; deterministic mock fallback otherwise)
-- Frontend-friendly stable JSON contracts
+## API response shape highlights
+`GET /adjudications/{id}` now includes:
+- `claim`
+- `generated_queries`
+- `evidence.retrieved_candidates`
+- `evidence.accepted_evidence`
+- `evidence.rejected_candidates`
+- `adjudication`
+- `citations`
+
+Each evidence object includes:
+- source metadata (PMID/title/journal/year/url)
+- `citation_link`
+- `label`, `decision`, `decision_reason`
+- `retrieval_score`, `directness_score`, `final_score`
+- extracted snippet/finding and limitations note
+
+## Configuration
+Environment variables (see `.env.example` and `app/core/config.py`):
+- `RETRIEVAL_MODE=pubmed|web|hybrid` (default `pubmed`)
+- `PUBMED_*` settings for NCBI retrieval
+- `OPENAI_API_KEY` (for model adjudication and web-assisted retrieval path)
 
 ## Quickstart
 ```bash
@@ -27,51 +58,18 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-## Sample curl commands
-```bash
-curl -s http://127.0.0.1:8000/health
+## Evaluation/testing hooks
+- Unit/integration tests validate:
+  - claim-specific query generation
+  - adjudication response schema with accepted/rejected split
+  - citation link presence
+  - PubMed parser robustness for tricky XML cases
 
-curl -s -X POST http://127.0.0.1:8000/claims \
-  -H "Content-Type: application/json" \
-  -d '{"user_text":"Does vTSC2 correlate with mTORC1 downregulation?"}'
-
-curl -s -X POST http://127.0.0.1:8000/claims/<claim_id>/adjudicate
-
-curl -s http://127.0.0.1:8000/adjudications/<adjudication_id>
-curl -s http://127.0.0.1:8000/adjudications/<adjudication_id>/evidence
-curl -s http://127.0.0.1:8000/adjudications/<adjudication_id>/citations
-```
-
-## Architecture (simple, extensible)
-- `api/routers`: thin route handlers
-- `services`: claim parsing, query generation, evidence pipeline, adjudicator
-- `providers`: PubMed and OpenAI wrappers
-- `repositories`: DB access
-- `schemas`: stable API contracts
-- `models`: SQLite persistence (claims + adjudications)
-
-## Example response (adjudication detail)
-Returns:
-- grouped evidence (`supporting`, `opposing`, `alternative`)
-- adjudication summary (`best_supported_conclusion`, `confidence`, limitations)
-- normalized citations list
-
-## Testing
+Run:
 ```bash
 pytest
 ```
 
 ## Notes
-- This is an MVP for adjudicating public literature claims.
-- Not medical advice.
-- Manual domain expert review is required for high-stakes decisions.
-
-## TODO / next steps
-- Background jobs for async adjudication execution
-- Embeddings + vector retrieval
-- Reranking and relevance scoring improvements
-- React/Next.js frontend integration
-- Auth / multi-user tenancy
-- Better evidence extraction and critical appraisal
-- Streaming adjudication updates
-- Additional literature sources beyond PubMed
+- This system improves scientific rigor but does **not** replace expert review.
+- High-stakes decisions require domain expert interpretation of primary literature.

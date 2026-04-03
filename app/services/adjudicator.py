@@ -1,58 +1,60 @@
 from app.core.config import settings
+from app.providers.openai_client import OpenAIClient
 from app.schemas.adjudications import AdjudicationSummary
 from app.schemas.common import ConfidenceEnum
-from app.schemas.evidence import EvidenceCard
-from app.providers.openai_client import OpenAIClient
+from app.schemas.evidence import EvidenceCandidate, EvidenceLabel
 
 
 class AdjudicatorService:
-    """Produces adjudication summary either via OpenAI or deterministic mock mode."""
+    """Produces adjudication summary with explicit evidence-grounding language."""
 
     def __init__(self, openai_client: OpenAIClient | None = None) -> None:
         self.openai = openai_client or OpenAIClient()
 
-    async def adjudicate(
-        self,
-        normalized_claim: str,
-        support: list[EvidenceCard],
-        oppose: list[EvidenceCard],
-        alternative: list[EvidenceCard],
-    ) -> AdjudicationSummary:
+    async def adjudicate(self, normalized_claim: str, accepted: list[EvidenceCandidate], rejected: list[EvidenceCandidate]) -> AdjudicationSummary:
         if settings.openai_api_key:
             out = await self.openai.adjudicate(
                 {
                     "claim": normalized_claim,
-                    "support": [e.model_dump() for e in support],
-                    "oppose": [e.model_dump() for e in oppose],
-                    "alternative": [e.model_dump() for e in alternative],
+                    "accepted_evidence": [e.model_dump(mode="json") for e in accepted],
+                    "rejected_candidates": [e.model_dump(mode="json") for e in rejected],
                 }
             )
             return AdjudicationSummary(**out)
-        return self._mock_adjudication(normalized_claim, support, oppose, alternative)
+        return self._mock_adjudication(normalized_claim, accepted, rejected)
 
     def _mock_adjudication(
-        self,
-        claim: str,
-        support: list[EvidenceCard],
-        oppose: list[EvidenceCard],
-        alternative: list[EvidenceCard],
+        self, claim: str, accepted: list[EvidenceCandidate], rejected: list[EvidenceCandidate]
     ) -> AdjudicationSummary:
-        s, o, a = len(support), len(oppose), len(alternative)
-        if s > o + 1:
+        direct_support = sum(1 for e in accepted if e.label == EvidenceLabel.direct_support)
+        oppose = sum(1 for e in accepted if e.label == EvidenceLabel.opposing)
+        alt = sum(1 for e in accepted if e.label == EvidenceLabel.alternative_contextual)
+
+        if direct_support >= oppose + 2:
             confidence = ConfidenceEnum.medium
-        elif o > s:
+            conclusion = "Current retrieved evidence leans toward support, but remains conditional on study quality and context."
+        elif oppose > direct_support:
             confidence = ConfidenceEnum.low
+            conclusion = "Current retrieved evidence leans against the claim or indicates meaningful contradiction."
         else:
             confidence = ConfidenceEnum.low
+            conclusion = "Retrieved evidence is mixed or weakly direct; no strong adjudication is justified."
+
+        grounding_note = (
+            "Evidence grounding is weak: few directly claim-bearing sources were accepted."
+            if direct_support + oppose <= 1
+            else "Evidence grounding is moderate: multiple claim-relevant sources were accepted."
+        )
 
         return AdjudicationSummary(
-            supporting_case=f"Support branch returned {s} records. Top title: {support[0].title if support else 'none'}.",
-            opposing_case=f"Oppose branch returned {o} records. Top title: {oppose[0].title if oppose else 'none'}.",
-            alternative_explanations=f"Alternative branch returned {a} records suggesting context/mechanism confounding.",
-            best_supported_conclusion=(
-                f"MVP mock conclusion for '{claim}': evidence is mixed; review full citations before relying on this finding."
-            ),
+            supporting_case=f"Accepted direct/indirect support items: {direct_support}.",
+            opposing_case=f"Accepted opposing items: {oppose}.",
+            alternative_explanations=f"Accepted alternative/contextual items: {alt}.",
+            best_supported_conclusion=f"For claim '{claim}': {conclusion}",
             confidence=confidence,
-            limitations="Mock adjudicator mode; no model-based critical appraisal. Manual expert review required.",
-            reasoning_summary="Counts and first-paper heuristics were used to balance supporting/opposing/alternative evidence.",
+            limitations=(
+                f"{len(rejected)} candidates were filtered out; automated screening may miss nuanced evidence quality factors."
+            ),
+            reasoning_summary="Conclusion based on accepted-vs-rejected separation and directness-aware labeling.",
+            evidence_grounding_note=grounding_note,
         )

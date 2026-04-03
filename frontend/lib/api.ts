@@ -9,7 +9,18 @@ import {
   type QuerySet,
 } from '@/lib/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api';
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly path: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
 export class ApiError extends Error {
   constructor(

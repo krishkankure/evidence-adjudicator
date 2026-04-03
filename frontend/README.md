@@ -20,7 +20,8 @@ npm run dev
 Open `http://localhost:3000`.
 
 ## Environment variables
-- `NEXT_PUBLIC_API_BASE_URL` (required): backend base URL, for example `http://localhost:8000`.
+- `API_BASE_URL` (recommended): backend base URL used by Next.js server-side rewrite proxy (default `http://127.0.0.1:8000`).
+- `NEXT_PUBLIC_API_BASE_URL` (optional): direct browser base URL. Leave unset unless you intentionally want browser-to-backend calls.
 
 ## Backend contract used
 - `POST /claims`

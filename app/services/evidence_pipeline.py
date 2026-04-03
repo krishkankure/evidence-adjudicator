@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.core.exceptions import ProviderError
 from app.providers.openai_client import OpenAIClient
 from app.providers.pubmed_client import PubMedClient
 from app.schemas.adjudications import GeneratedQueries
@@ -94,7 +95,16 @@ class EvidencePipelineService:
         raw: list[RetrievalResult] = []
         for q in queries.items:
             for backend in self.backends:
-                results = await backend.search(q.query, q.intent)
+                try:
+                    results = await backend.search(q.query, q.intent)
+                except ProviderError as exc:
+                    logger.warning(
+                        "retrieval backend failure query=%s backend=%s error=%s",
+                        q.query,
+                        backend.source_type,
+                        exc.message,
+                    )
+                    continue
                 logger.info("retrieval query=%s backend=%s count=%s", q.query, backend.source_type, len(results))
                 raw.extend(results)
 

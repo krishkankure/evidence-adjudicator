@@ -1,4 +1,5 @@
 from app.core.config import settings
+from app.core.exceptions import ProviderError
 from app.providers.openai_client import OpenAIClient
 from app.schemas.adjudications import AdjudicationSummary
 from app.schemas.common import ConfidenceEnum
@@ -13,14 +14,17 @@ class AdjudicatorService:
 
     async def adjudicate(self, normalized_claim: str, accepted: list[EvidenceCandidate], rejected: list[EvidenceCandidate]) -> AdjudicationSummary:
         if settings.openai_api_key:
-            out = await self.openai.adjudicate(
-                {
-                    "claim": normalized_claim,
-                    "accepted_evidence": [e.model_dump(mode="json") for e in accepted],
-                    "rejected_candidates": [e.model_dump(mode="json") for e in rejected],
-                }
-            )
-            return AdjudicationSummary(**out)
+            try:
+                out = await self.openai.adjudicate(
+                    {
+                        "claim": normalized_claim,
+                        "accepted_evidence": [e.model_dump(mode="json") for e in accepted],
+                        "rejected_candidates": [e.model_dump(mode="json") for e in rejected],
+                    }
+                )
+                return AdjudicationSummary(**out)
+            except ProviderError:
+                return self._mock_adjudication(normalized_claim, accepted, rejected)
         return self._mock_adjudication(normalized_claim, accepted, rejected)
 
     def _mock_adjudication(

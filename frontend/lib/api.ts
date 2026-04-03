@@ -9,20 +9,48 @@ import {
   type QuerySet,
 } from '@/lib/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api';
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly path: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  const url = `${API_BASE_URL}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Network request failed.';
+    throw new ApiError(`Network error calling ${path}: ${message}`, path);
+  }
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Request failed.');
+    const raw = await response.text();
+    let parsedMessage = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: string } };
+      parsedMessage = parsed.error?.message ?? raw;
+    } catch {
+      // keep raw text
+    }
+
+    const message = parsedMessage?.trim() || `Request failed with status ${response.status}.`;
+    throw new ApiError(`API ${response.status} calling ${path}: ${message}`, path, response.status);
   }
 
   return response.json() as Promise<T>;
@@ -42,13 +70,15 @@ export function adjudicateClaim(claimId: string): Promise<AdjudicateClaimRespons
 }
 
 export async function getAdjudication(adjudicationId: string): Promise<AdjudicationResponse> {
-  const [adjudication, evidenceRows, citationRows] = await Promise.all([
+  const [adjudication, evidencePayload, citationRows] = await Promise.all([
     request<Record<string, unknown>>(`/adjudications/${adjudicationId}`),
-    request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/evidence`),
+    request<Record<string, unknown> | Record<string, unknown>[]>(`/adjudications/${adjudicationId}/evidence`),
     request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/citations`),
   ]);
 
   const querySet = parseQuerySet(adjudication.generated_queries);
+
+  const evidenceRows = normalizeEvidenceRows(evidencePayload);
 
   return {
     adjudication_id: String(adjudication.adjudication_id ?? adjudicationId),
@@ -67,6 +97,15 @@ export async function getAdjudication(adjudicationId: string): Promise<Adjudicat
     evidence: evidenceRows.map((row, index) => mapEvidence(row, index)),
     citations: citationRows.map((row, index) => mapCitation(row, index)),
   };
+}
+
+function normalizeEvidenceRows(value: Record<string, unknown> | Record<string, unknown>[]): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value;
+  const accepted = value.accepted_evidence;
+  if (Array.isArray(accepted)) return accepted as Record<string, unknown>[];
+  const retrieved = value.retrieved_candidates;
+  if (Array.isArray(retrieved)) return retrieved as Record<string, unknown>[];
+  return [];
 }
 
 function parseQuerySet(value: unknown): QuerySet | undefined {

@@ -11,18 +11,46 @@ import {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly path: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  const url = `${API_BASE_URL}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Network request failed.';
+    throw new ApiError(`Network error calling ${path}: ${message}`, path);
+  }
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Request failed.');
+    const raw = await response.text();
+    let parsedMessage = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: string } };
+      parsedMessage = parsed.error?.message ?? raw;
+    } catch {
+      // keep raw text
+    }
+
+    const message = parsedMessage?.trim() || `Request failed with status ${response.status}.`;
+    throw new ApiError(`API ${response.status} calling ${path}: ${message}`, path, response.status);
   }
 
   return response.json() as Promise<T>;

@@ -183,3 +183,23 @@ def test_directness_filter_rejects_tangential_evidence(monkeypatch) -> None:  # 
     rejected_titles = [e["title"] for e in detail["evidence"]["rejected_candidates"]]
     assert any("Omega-3" in t for t in accepted_titles)
     assert any("Eye movement" in t for t in rejected_titles)
+
+
+def test_adjudication_survives_pubmed_provider_failures(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def _failing_search(self, query: str, retmax: int | None = None) -> list[dict]:  # noqa: ARG001
+        raise ProviderError("PubMed request failed: timeout")
+
+    monkeypatch.setattr(PubMedClient, "search_articles", _failing_search)
+
+    with TestClient(app) as client:
+        create = client.post("/claims", json={"user_text": "Does KRAS G12C predict response to KRAS inhibitors in NSCLC?"})
+        claim_id = create.json()["claim_id"]
+
+        adj = client.post(f"/claims/{claim_id}/adjudicate")
+        assert adj.status_code == 200
+
+        detail = client.get(f"/adjudications/{adj.json()['adjudication_id']}")
+        assert detail.status_code == 200
+        body = detail.json()
+        assert body["evidence"]["accepted_evidence"] == []
+        assert body["adjudication"]["best_supported_conclusion"]

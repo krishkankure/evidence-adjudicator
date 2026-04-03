@@ -91,10 +91,10 @@ def test_adjudication_flow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         assert cit.status_code == 200
 
 
-def test_adjudication_flow_prints_inputs_outputs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(PubMedClient, "search_articles", _fake_search)
+def test_adjudication_flow_prints_inputs_outputs_real_pubmed() -> None:
     with TestClient(app) as client:
-        claim_input = {"user_text": "Is KRAS associated with treatment response?"}
+        # Use a broad/stable claim so at least the support branch consistently retrieves real PubMed articles.
+        claim_input = {"user_text": "Is cancer associated with inflammation?"}
         print("INPUT /claims:", claim_input)
         create = client.post("/claims", json=claim_input)
         print("OUTPUT /claims:", create.status_code, create.json())
@@ -113,6 +113,11 @@ def test_adjudication_flow_prints_inputs_outputs(monkeypatch) -> None:  # type: 
         detail = client.get(detail_path)
         print("OUTPUT", detail_path, ":", detail.status_code, detail.json())
         assert detail.status_code == 200
+        payload = detail.json()
+        support = payload["evidence"]["supporting"]
+        assert support, "Expected real PubMed evidence in the support branch."
+        assert support[0]["pmid"] not in {None, "", "999"}
+        assert not support[0]["title"].startswith("Result for ")
 
 
 def test_pubmed_parsing_handles_nested_text_collective_author_and_medline_date() -> None:

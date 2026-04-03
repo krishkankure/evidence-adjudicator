@@ -42,13 +42,15 @@ export function adjudicateClaim(claimId: string): Promise<AdjudicateClaimRespons
 }
 
 export async function getAdjudication(adjudicationId: string): Promise<AdjudicationResponse> {
-  const [adjudication, evidenceRows, citationRows] = await Promise.all([
+  const [adjudication, evidencePayload, citationRows] = await Promise.all([
     request<Record<string, unknown>>(`/adjudications/${adjudicationId}`),
-    request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/evidence`),
+    request<Record<string, unknown> | Record<string, unknown>[]>(`/adjudications/${adjudicationId}/evidence`),
     request<Record<string, unknown>[]>(`/adjudications/${adjudicationId}/citations`),
   ]);
 
   const querySet = parseQuerySet(adjudication.generated_queries);
+
+  const evidenceRows = normalizeEvidenceRows(evidencePayload);
 
   return {
     adjudication_id: String(adjudication.adjudication_id ?? adjudicationId),
@@ -67,6 +69,15 @@ export async function getAdjudication(adjudicationId: string): Promise<Adjudicat
     evidence: evidenceRows.map((row, index) => mapEvidence(row, index)),
     citations: citationRows.map((row, index) => mapCitation(row, index)),
   };
+}
+
+function normalizeEvidenceRows(value: Record<string, unknown> | Record<string, unknown>[]): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value;
+  const accepted = value.accepted_evidence;
+  if (Array.isArray(accepted)) return accepted as Record<string, unknown>[];
+  const retrieved = value.retrieved_candidates;
+  if (Array.isArray(retrieved)) return retrieved as Record<string, unknown>[];
+  return [];
 }
 
 function parseQuerySet(value: unknown): QuerySet | undefined {

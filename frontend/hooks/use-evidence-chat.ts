@@ -39,8 +39,9 @@ export function useEvidenceChat() {
             : message,
         ),
       );
-    } catch {
-      const friendly = 'Unable to complete adjudication right now. Please try again.';
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Unknown failure';
+      const friendly = `Unable to complete adjudication right now. Please try again.\n\nReason: ${reason}`;
       setError(friendly);
       setMessages((prev) =>
         prev.map((message) =>
